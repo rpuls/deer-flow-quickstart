@@ -43,10 +43,13 @@ COPY --from=uv-source /uv /uvx /usr/local/bin/
 WORKDIR /app
 COPY backend ./backend
 
-# The cache mount carries an explicit `id`: Railway's Metal builder rejects a
-# cache mount without one, while plain BuildKit just defaults it to the target.
-RUN --mount=type=cache,id=deerflow-uv,target=/root/.cache/uv \
-    sh -c 'cd backend && \
+# Deliberately no `--mount=type=cache` here. Railway's builder only accepts a
+# cache mount whose id is `s/<service id>-<target>`, and its docs are explicit
+# that env vars cannot be used in a cache mount id -- so a one-click template,
+# which has no way to know the service id it will be deployed as, cannot name
+# one. Layer caching still covers the common rebuild; this costs a wheel
+# re-download only when backend/ itself changes.
+RUN sh -c 'cd backend && \
     set -f; \
     extras_flags=""; \
     for extra in $(printf "%s" "$UV_EXTRAS" | tr "," " "); do \

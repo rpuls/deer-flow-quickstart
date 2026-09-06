@@ -150,6 +150,12 @@ research rows are orphaned and `BASIC_MODEL__*` / `SEARCH_API` /
 `RESEARCH_DB_*` / `ALLOWED_ORIGINS` are ignored. Delete them, and tell existing
 users to re-add their model provider under Settings -> Providers.
 
+One trap: the 1.x template built the frontend from a `web/` folder, so its web
+service has **Root Directory `/web`**. That is a per-service setting, not a
+variable, so replacing the variable block alone leaves the build failing at
+`unpacking archive` with `lstat .../web: no such file or directory`. Set both
+services back to `/`.
+
 ## Security notes
 
 - Treat the deployment as trusted-tenant: complete the admin setup immediately
