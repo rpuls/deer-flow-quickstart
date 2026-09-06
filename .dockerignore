@@ -1,6 +1,9 @@
-# Git
+**/.env
+Dockerfile
+.dockerignore
 .git
 .gitignore
+docker/
 
 # Python
 __pycache__
@@ -51,16 +54,50 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Node.js (if any)
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# Project specific
+conf.yaml
+web/
+docs/
+examples/
+assets/
+tests/
+*.log
 
-# Railway
-railway.json
-railway.toml
+# Exclude directories not needed in Docker context
+# Frontend build only needs frontend/
+# Backend build only needs backend/
+scripts/
+logs/
+docker/
+frontend/.next
+frontend/node_modules
+backend/.venv
+backend/htmlcov
+backend/.coverage
 
-# Temporary files
-*.tmp
-*.temp
+# Runtime data written by a running DeerFlow, not build inputs. backend/Dockerfile
+# does `COPY backend ./backend`, so leaving these in the context both bakes the
+# sqlite database, per-user uploads and the JWT secret into the image and breaks
+# the build outright once the app has created directories owned by the container's
+# root that the build client cannot read.
+**/.deer-flow/
+backend/sandbox/
+*.md
+!README.md
+!frontend/README.md
+!backend/README.md
+
+# skills/ is a runtime input, not documentation: the quickstart gateway image
+# bakes it in because a PaaS deployment has no bind mounts to supply it, and
+# each skill *is* its SKILL.md. Kept out of the exclusions above so the build
+# is correct whichever ignore file the builder picks -- Railway does not
+# honour deploy/railway/Dockerfile.gateway.dockerignore.
+!skills/
+!skills/**
+
+# Extension manager snapshots must enter the backend builder intact. A Python
+# package may require README metadata, native modules, or package assets that
+# the general image-context exclusions above intentionally omit elsewhere.
+!backend/extensions/
+!backend/extensions/sources/
+!backend/extensions/sources/**

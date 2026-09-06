@@ -1,0 +1,23 @@
+# BuildKit prefers `<dockerfile>.dockerignore` over the repository root
+# `.dockerignore`. The frontend build needs frontend/ intact, including the
+# MDX content the root list would otherwise strip.
+
+.git
+.github
+**/.env
+**/node_modules
+frontend/.next
+**/__pycache__
+**/.deer-flow/
+
+# Not build inputs for the frontend.
+backend/
+docs/
+plans/
+pr-build/
+examples/
+deploy/helm/
+docker/
+skills/
+tests/
+assets/

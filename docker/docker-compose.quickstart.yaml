@@ -1,0 +1,100 @@
+# Local mirror of the one-click cloud deployment.
+#
+#   docker compose -f docker/docker-compose.quickstart.yaml up --build
+#   open http://localhost:3000
+#
+# Same three moving parts as the Railway template, same images, same start-up
+# path - so a problem reproduced here is the problem people hit in the cloud:
+#
+#   postgres  persistence for threads, checkpoints, users and provider keys
+#   gateway   FastAPI + agent runtime, config.yaml rendered at container start
+#   web       Next.js, and the only service published to the host; it proxies
+#             /api/* to the gateway exactly as it does in the cloud
+#
+# There are deliberately NO API keys here. Start it, create the admin account,
+# then add a provider under Settings -> Providers.
+
+name: deer-flow-quickstart
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: deer-flow-quickstart-postgres
+    environment:
+      POSTGRES_USER: deerflow
+      POSTGRES_PASSWORD: deerflow
+      POSTGRES_DB: deerflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deerflow -d deerflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [deer-flow-quickstart]
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/railway/Dockerfile.gateway
+    container_name: deer-flow-quickstart-gateway
+    environment:
+      DATABASE_URL: postgresql://deerflow:deerflow@postgres:5432/deerflow
+      # Encrypts provider credentials at rest. Any stable string works; change
+      # it and previously stored keys have to be entered again.
+      DEER_FLOW_QUICKSTART_SECRET: local-development-secret-change-me
+      # The browser talks to the web service, so that is the origin the Gateway
+      # must accept auth POSTs from.
+      GATEWAY_CORS_ORIGINS: http://localhost:3000
+      # Uncomment to seed a provider from the environment instead of the UI.
+      # OPENAI_API_KEY: sk-...
+      # TAVILY_API_KEY: tvly-...
+    volumes:
+      # Sandbox scratch space, uploads and the skill projection. Keeping it in a
+      # volume means a rebuild does not lose a conversation's working files.
+      - gateway-home:/app/.deer-flow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request, sys
+          sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:8001/health/ready", timeout=5).status == 200 else 1)
+      interval: 5s
+      timeout: 10s
+      retries: 40
+      start_period: 30s
+    networks: [deer-flow-quickstart]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/railway/Dockerfile.web
+    container_name: deer-flow-quickstart-web
+    environment:
+      DEER_FLOW_INTERNAL_GATEWAY_BASE_URL: http://gateway:8001
+      DEER_FLOW_TRUSTED_ORIGINS: http://localhost:3000
+      PORT: "3000"
+    ports:
+      # Loopback only: the agent can run code, so this stack is meant for a
+      # trusted local machine. Publish it wider only behind your own front door.
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks: [deer-flow-quickstart]
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  gateway-home:
+
+networks:
+  deer-flow-quickstart:
+    driver: bridge

@@ -1,0 +1,32 @@
+# BuildKit prefers `<dockerfile>.dockerignore` over the repository root
+# `.dockerignore`. This image needs config.example.yaml and skills/, both of
+# which the root file excludes, so it carries its own list.
+
+.git
+.github
+**/.env
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+
+# Runtime state. Baking a live SQLite database, uploaded files or a JWT secret
+# into the image is both wrong and a build failure waiting to happen.
+**/.deer-flow/
+backend/sandbox/
+backend/htmlcov
+backend/.coverage
+
+# Not build inputs for the gateway.
+frontend/
+docs/
+plans/
+pr-build/
+examples/
+deploy/helm/
+docker/
+assets/
+tests/
+backend/tests/

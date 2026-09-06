@@ -1,0 +1,40 @@
+# Next.js frontend image for one-click PaaS deployments.
+#
+# Two differences from frontend/Dockerfile, both about staying runtime-
+# configurable:
+#   * The /api proxy target is baked against a sentinel host and rewritten by
+#     web-entrypoint.sh at container start. Next.js freezes `rewrites()` into
+#     routes-manifest.json during the build, so a runtime env var alone would
+#     be ignored.
+#   * Its own build-context ignore list, because the repository root
+#     .dockerignore drops content the frontend build needs.
+#
+# Build context: the repository root.
+
+FROM node:22-alpine AS base
+RUN corepack enable && corepack install -g pnpm@10.26.2
+WORKDIR /app
+COPY frontend ./frontend
+
+FROM base AS builder
+RUN cd /app/frontend && pnpm install --frozen-lockfile
+ARG APP_VERSION=""
+ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION
+# Sentinel, not a real host: web-entrypoint.sh substitutes the deployment's
+# Gateway URL for it before the server starts.
+ENV DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://deerflow-gateway.invalid:8001
+# Runtime configuration is injected by the platform, so build-time env
+# validation has nothing real to check.
+RUN cd /app/frontend && SKIP_ENV_VALIDATION=1 pnpm build
+
+FROM node:22-alpine AS prod
+RUN corepack enable && corepack install -g pnpm@10.26.2
+WORKDIR /app
+COPY --from=builder /app/frontend ./frontend
+COPY deploy/railway/web-entrypoint.sh /usr/local/bin/deerflow-web-entrypoint
+RUN chmod +x /usr/local/bin/deerflow-web-entrypoint
+ENV NODE_ENV=production \
+    PORT=3000
+EXPOSE 3000
+# `next start` honours $PORT, which is what Railway and most PaaS platforms set.
+ENTRYPOINT ["/usr/local/bin/deerflow-web-entrypoint"]
