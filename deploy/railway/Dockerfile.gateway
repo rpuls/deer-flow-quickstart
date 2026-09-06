@@ -43,7 +43,9 @@ COPY --from=uv-source /uv /uvx /usr/local/bin/
 WORKDIR /app
 COPY backend ./backend
 
-RUN --mount=type=cache,target=/root/.cache/uv \
+# The cache mount carries an explicit `id`: Railway's Metal builder rejects a
+# cache mount without one, while plain BuildKit just defaults it to the target.
+RUN --mount=type=cache,id=deerflow-uv,target=/root/.cache/uv \
     sh -c 'cd backend && \
     set -f; \
     extras_flags=""; \
