@@ -358,3 +358,89 @@ def test_bootstrap_is_a_no_op_outside_managed_mode(quickstart_env, monkeypatch):
     monkeypatch.delenv("DEER_FLOW_QUICKSTART_MANAGED_CONFIG")
     assert bootstrap.run() == 0
     assert not config_builder.target_config_path().exists()
+
+
+# ---------------------------------------------------------------------------
+# Startup resilience
+# ---------------------------------------------------------------------------
+
+
+def _unreachable(_url):
+    raise OSError("connection refused")
+
+
+def test_load_degrades_quietly_but_load_strict_reports_an_unreachable_database(quickstart_env, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db:5432/deerflow")
+    monkeypatch.setattr(store, "_get_engine", _unreachable)
+
+    # A request must never 500 because the store blinked...
+    assert store.load() == store.QuickstartSettings()
+    # ...but the pre-start renderer has to tell "no providers are configured"
+    # apart from "the providers could not be read".
+    with pytest.raises(store.StoreUnavailableError):
+        store.load_strict()
+
+
+def test_load_strict_reads_the_file_store_when_no_database_is_configured(quickstart_env):
+    settings = store.QuickstartSettings()
+    settings.upsert_provider(
+        store.LLMProviderSettings(
+            provider_id="openai",
+            api_key="sk-file-backed",
+            models=[store.ModelSettings(id="gpt-4.1")],
+        )
+    )
+    store.save(settings)
+
+    assert store.load_strict().provider("openai").api_key == "sk-file-backed"
+
+
+def test_wait_until_available_is_a_no_op_without_a_database(quickstart_env):
+    assert store.wait_until_available(0.0) is True
+
+
+def test_wait_until_available_gives_up_on_a_database_that_never_answers(quickstart_env, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db:5432/deerflow")
+    monkeypatch.setattr(store, "_get_engine", _unreachable)
+
+    assert store.wait_until_available(0.0) is False
+
+
+def test_wait_until_available_retries_a_database_that_is_still_starting(quickstart_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("DEER_FLOW_QUICKSTART_DB_URL", f"sqlite:///{(tmp_path / 'settings.db').as_posix()}")
+    real_get_engine = store._get_engine
+    attempts = {"count": 0}
+
+    def flaky(url):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise OSError("the database system is starting up")
+        return real_get_engine(url)
+
+    monkeypatch.setattr(store, "_get_engine", flaky)
+
+    assert store.wait_until_available(30.0, interval=0.01) is True
+    assert attempts["count"] == 3
+
+
+def test_bootstrap_fails_rather_than_publish_a_config_that_lost_every_provider(quickstart_env, monkeypatch):
+    from app.quickstart import bootstrap
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db:5432/deerflow")
+    monkeypatch.setenv(bootstrap.DB_WAIT_ENV, "0")
+    monkeypatch.setattr(store, "_get_engine", _unreachable)
+
+    assert bootstrap.run() == 1
+    # The half that matters: a deployment that cannot read its providers must
+    # not boot advertising none of them.
+    assert not config_builder.target_config_path().exists()
+
+
+def test_db_wait_seconds_survives_a_nonsense_value(quickstart_env, monkeypatch):
+    from app.quickstart import bootstrap
+
+    monkeypatch.setenv(bootstrap.DB_WAIT_ENV, "soon")
+    assert bootstrap.db_wait_seconds() == bootstrap.DEFAULT_DB_WAIT_SECONDS
+
+    monkeypatch.setenv(bootstrap.DB_WAIT_ENV, "5")
+    assert bootstrap.db_wait_seconds() == 5.0

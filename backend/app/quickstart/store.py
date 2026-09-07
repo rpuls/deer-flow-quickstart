@@ -22,12 +22,13 @@ import json
 import logging
 import os
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Column, MetaData, String, Table, Text, create_engine, delete, insert, select, update
+from sqlalchemy import Column, MetaData, String, Table, Text, create_engine, delete, insert, select, text, update
 from sqlalchemy.engine import Engine
 
 from app.quickstart import crypto
@@ -284,6 +285,66 @@ def load() -> QuickstartSettings:
     except OSError:
         logger.exception("Could not read %s", path)
     return QuickstartSettings()
+
+
+class StoreUnavailableError(RuntimeError):
+    """A database store is configured but could not be read."""
+
+
+def load_strict() -> QuickstartSettings:
+    """Read the stored settings, refusing to guess when the database is down.
+
+    ``load()`` degrades to empty settings so a single request never 500s. The
+    pre-start bootstrap must not do that. It renders ``config.yaml`` from
+    whatever it reads, and on a PaaS the container filesystem is discarded on
+    every redeploy - so a database that is merely slow to accept connections
+    would publish a config with no models at all, and the deployment would go
+    healthy but unusable until an operator re-saved every provider by hand.
+    Raising here lets the platform restart us instead.
+    """
+    url = database_url()
+    if not url:
+        return load()
+    try:
+        engine = _get_engine(url)
+        with engine.connect() as connection:
+            row = connection.execute(select(_settings_table.c.value).where(_settings_table.c.key == SETTINGS_KEY)).first()
+    except Exception as error:  # noqa: BLE001 - re-raised as a typed failure
+        raise StoreUnavailableError(f"Could not read quickstart settings from the configured database: {error}") from error
+    return _deserialize(row[0]) if row else QuickstartSettings()
+
+
+def wait_until_available(timeout: float, interval: float = 2.0) -> bool:
+    """Block until the configured database answers, or ``timeout`` elapses.
+
+    ``True`` means there was nothing to wait for (the file backend) or the
+    database answered. Every service in a one-click stack starts at the same
+    moment and managed Postgres add-ons routinely refuse connections for the
+    first few seconds, so an unbounded assumption either way is wrong.
+    """
+    url = database_url()
+    if not url:
+        return True
+    deadline = time.monotonic() + max(timeout, 0.0)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            engine = _get_engine(url)
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            if attempt > 1:
+                logger.info("Database became available after %d attempt(s)", attempt)
+            return True
+        except Exception as error:  # noqa: BLE001 - any driver error means "not ready"
+            # A failed engine must not stay cached; the next attempt rebuilds it.
+            dispose()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.error("Database still unreachable after %.0fs and %d attempt(s): %s", timeout, attempt, error)
+                return False
+            logger.warning("Database is not accepting connections yet (attempt %d): %s", attempt, error)
+            time.sleep(min(interval, remaining))
 
 
 def save(settings: QuickstartSettings) -> None:

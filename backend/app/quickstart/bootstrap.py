@@ -6,19 +6,40 @@ entrypoint runs. It exists because ``create_app()`` tolerates a missing
 deployment, with no config file and no API keys anywhere, something has to
 write a valid config before uvicorn starts.
 
-It is deliberately hard to fail: if the settings store is unreachable, it still
-renders a config from ``config.example.yaml`` plus the environment, so the
-Gateway boots with zero models and the operator can onboard from the web UI.
+Failure handling is asymmetric on purpose. With no database configured there is
+nothing to lose, so a bad read still renders a config from
+``config.example.yaml`` plus the environment and the operator onboards from the
+web UI. With a database configured the stored providers *are* the deployment's
+configuration, and the container filesystem is discarded on every redeploy - so
+rendering an empty config because Postgres was slow to accept connections would
+hand back a deployment that looks healthy and has no models. That case waits,
+and then fails loudly so the platform restarts us.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 from app.quickstart import config_builder, store
 
 logger = logging.getLogger("app.quickstart.bootstrap")
+
+DB_WAIT_ENV = "DEER_FLOW_QUICKSTART_DB_WAIT_SECONDS"
+DEFAULT_DB_WAIT_SECONDS = 60.0
+
+
+def db_wait_seconds() -> float:
+    """How long to wait for a configured database before giving up."""
+    raw = os.getenv(DB_WAIT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_DB_WAIT_SECONDS
+    try:
+        return max(float(raw), 0.0)
+    except ValueError:
+        logger.warning("%s=%r is not a number; using %.0fs", DB_WAIT_ENV, raw, DEFAULT_DB_WAIT_SECONDS)
+        return DEFAULT_DB_WAIT_SECONDS
 
 
 def run() -> int:
@@ -26,8 +47,17 @@ def run() -> int:
         logger.info("%s is not set; leaving config.yaml alone", config_builder.MANAGED_ENV_VAR)
         return 0
 
+    if not store.wait_until_available(db_wait_seconds()):
+        logger.error(
+            "The configured database never became available. Refusing to render a config with no providers - restarting is better than a deployment that looks healthy and cannot chat.",
+        )
+        return 1
+
     try:
-        settings = store.load()
+        settings = store.load_strict()
+    except store.StoreUnavailableError:
+        logger.exception("Could not read the settings store; refusing to render a config that would drop every provider")
+        return 1
     except Exception:
         logger.exception("Could not load quickstart settings; continuing with empty settings")
         settings = store.QuickstartSettings()

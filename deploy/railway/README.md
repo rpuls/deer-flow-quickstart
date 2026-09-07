@@ -79,6 +79,8 @@ network is IPv6-only, which is why the gateway listens dual-stack
 | `REDIS_URL`                         | Switches the SSE stream bridge to Redis. Required before `GATEWAY_WORKERS` > 1.           |
 | `GATEWAY_WORKERS`                   | Uvicorn worker count. Leave at 1 unless Redis is configured.                              |
 | `LOG_LEVEL`                         | `debug`, `info`, `warning`, `error`.                                                      |
+| `DEER_FLOW_GATEWAY_WAIT_SECONDS`    | How long the web container waits for the gateway before serving anyway. Default `90`; `0` disables the wait. |
+| `DEER_FLOW_QUICKSTART_DB_WAIT_SECONDS` | How long the gateway waits for Postgres before giving up and restarting. Default `60`. |
 | `DEER_FLOW_ALLOW_HOST_BASH`         | `1` lets the agent run shell commands inside the gateway container. Off by default; see Security notes. |
 | `UV_EXTRAS`                         | Build arg for extra Python extras, e.g. `postgres,redis,ollama`. Defaults to `postgres,redis`. |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, … | Optional. A key found in the environment seeds that provider on first boot; the UI wins from then on. |
@@ -94,10 +96,15 @@ Per-service settings (not environment variables):
 | Python-backend  | `/`            | **no**        | `/app/.deer-flow`          |
 | Postgres        | -              | no            | `/var/lib/postgresql/data` |
 
-Root Directory must be the repository root: both Dockerfiles build with the
-repo root as their context. The volume on the backend holds per-thread uploads,
-agent workspaces, generated outputs and `memory.json`; conversations themselves
-live in Postgres and survive without it.
+Root Directory must be the repository root **on both services, in the template
+itself** - both Dockerfiles build with the repo root as their context. A
+template still carrying the 1.x value `/web` fails 100% of its deploys about
+two seconds in, at `unpacking archive`, before a single application log line
+is written, so it reads like a random crash rather than a settings error.
+
+The volume on the backend holds per-thread uploads, agent workspaces, generated
+outputs and `memory.json`; conversations themselves live in Postgres and
+survive without it.
 
 Which Dockerfile each service builds is selected by the `RAILWAY_DOCKERFILE_PATH`
 variable in the blocks below. Railway's template editor has no field for a
@@ -106,9 +113,16 @@ config-as-code path, and there is no environment variable for one, so
 created from the dashboard with *Config as code* pointed at them. The images do
 not depend on them.
 
-Health check paths are therefore optional here. If the template editor exposes
-one, use `/healthz` for the web service and `/health/ready` for the backend;
-without them Railway simply routes traffic as soon as the container starts.
+**Set the health check path on both services.** With it empty Railway marks a
+deploy healthy the moment the container starts, so a service that boots and
+then fails still reports as a successful deploy - which is how a broken
+template racks up green deploys nobody can use. Use `/healthz` for the web
+service and `/health/ready` for the backend, with a 300s timeout.
+
+| Service        | Health check path | Timeout |
+| -------------- | ----------------- | ------- |
+| Web Interface  | `/healthz`        | `300`   |
+| Python-backend | `/health/ready`   | `300`   |
 
 Paste these into Railway's raw variable editor, replacing what is there.
 
