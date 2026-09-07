@@ -23,7 +23,19 @@ describe("interaction-only bundle boundaries", () => {
     const dialog = read(
       "src/components/workspace/settings/settings-dialog.tsx",
     );
-    expect(dialog.match(/dynamic\(/g)).toHaveLength(10);
+    // Assert the boundary itself rather than a page count: every settings page
+    // the dialog renders must resolve to a dynamic() import, and every dynamic
+    // import must actually be rendered. A hard-coded total has to be edited
+    // whenever a section is added, which fails the build for a reason that has
+    // nothing to do with the bundle boundary this test exists to protect.
+    const lazy = [
+      ...dialog.matchAll(/const (\w+SettingsPage) = dynamic\(/g),
+    ].map((match) => match[1]);
+    const rendered = [...dialog.matchAll(/<(\w+SettingsPage)[\s/>]/g)].map(
+      (match) => match[1],
+    );
+    expect(lazy.length).toBeGreaterThanOrEqual(10);
+    expect([...new Set(rendered)].sort()).toEqual([...new Set(lazy)].sort());
     expect(dialog).not.toMatch(
       /import \{ \w+SettingsPage \} from "@\/components\/workspace\/settings\//,
     );
